@@ -1,6 +1,6 @@
 /* Minimal offline-first service worker: cache the app shell so it
    opens instantly and works with no network, once first loaded. */
-const CACHE = 'stockbill-v5';
+const CACHE = 'stockbill-v6';
 const ASSETS = [
   './', './index.html', './styles.css', './db.js',
   './core.js', './data.js', './pdf.js', './backup.js', './home.js', './settings.js',

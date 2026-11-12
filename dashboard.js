@@ -115,7 +115,11 @@ SCREENS.reports = async (view) => {
     Object.entries(tabBtns).forEach(([k, b]) => b.className = `btn sm ${k === tab ? '' : 'secondary'}`);
     const body = $('#reportBody');
     if (tab === 'daily') { body.innerHTML = renderDaily(dailyDate); return; }
-    if (tab === 'overview') { body.innerHTML = renderOverview(); return; }
+    if (tab === 'overview') {
+      body.innerHTML = renderOverview();
+      $$('.card[data-cid]', body).forEach(el => el.onclick = () => Nav.push('customerDetail', { customerId: el.dataset.cid }));
+      return;
+    }
     const { from, to } = periodRange(period, customFrom, customTo);
     if (tab === 'supplier') { body.innerHTML = renderSupplierWise(from, to); return; }
     if (tab === 'customer') {
@@ -182,6 +186,20 @@ SCREENS.reports = async (view) => {
     const monthlySeries = fyMonthlySalesSeries(customerInvoices);
     const currentMonthIdx = monthlySeries.findIndex(m => inRange(today, m.from, m.to));
 
+    // Loyalty programme liability: every point sitting on a customer's balance is a
+    // future discount you'll give away, so this is read as "money owed", not "money earned".
+    const totalPointsOutstanding = customers.reduce((s, c) => s + (c.pointsBalance || 0), 0);
+    const totalLoyaltyLiability = round2(totalPointsOutstanding * (SETTINGS.loyaltyRedemptionValue || 0));
+    let totalPointsEarned = 0, totalPointsRedeemed = 0, totalPointsClawedBack = 0;
+    for (const c of customers) {
+      for (const l of (c.loyaltyLedger || [])) {
+        if (l.type === 'earn') totalPointsEarned += l.points || 0;
+        else if (l.type === 'redeem') totalPointsRedeemed += l.points || 0;
+        else if (l.type === 'return_adjustment') totalPointsClawedBack += Math.abs(l.points || 0);
+      }
+    }
+    const topHolders = [...customers].filter(c => (c.pointsBalance || 0) > 0).sort((a, b) => (b.pointsBalance || 0) - (a.pointsBalance || 0)).slice(0, 8);
+
     const buckets = { '0-30': 0, '31-60': 0, '61-90': 0, '90+': 0 };
     batches.filter(b => (b.qtyRemaining || 0) > 0).forEach(b => {
       const d = daysSince(b.purchaseDate);
@@ -212,6 +230,26 @@ SCREENS.reports = async (view) => {
         <div class="chart-sub">April to March, current financial year</div>
         ${renderBarChart(monthlySeries, { highlightIndex: currentMonthIdx })}
       </div>
+
+      <div class="section-title">Loyalty programme</div>
+      <div class="stat-grid">
+        <div class="stat"><div class="num">${totalPointsOutstanding}</div><div class="lbl">Points outstanding (all customers)</div></div>
+        <div class="stat"><div class="num">${fmtMoney(totalLoyaltyLiability)}</div><div class="lbl">Future discount value owed</div></div>
+      </div>
+      <div class="card">
+        <div class="row between"><span>Points earned (all-time)</span><b>${totalPointsEarned}</b></div>
+        <div class="divider"></div>
+        <div class="row between"><span>Points redeemed (all-time)</span><b>${totalPointsRedeemed}</b></div>
+        ${totalPointsClawedBack ? `<div class="divider"></div><div class="row between"><span>Clawed back on returns</span><b style="color:var(--danger)">-${totalPointsClawedBack}</b></div>` : ''}
+      </div>
+      ${topHolders.length ? `
+        <div class="helptext" style="margin:-2px 4px 8px">Top customers by points held — tap to open their ledger</div>
+        ${topHolders.map(c => `<div class="card row between" data-cid="${c.id}" style="cursor:pointer">
+          <span>${esc(c.name)}</span>
+          <b>${c.pointsBalance} pts <span style="color:var(--text-muted);font-weight:500">(${fmtMoney(round2((c.pointsBalance || 0) * (SETTINGS.loyaltyRedemptionValue || 0)))})</span></b>
+        </div>`).join('')}
+      ` : `<div class="empty" style="padding:16px">No outstanding loyalty points yet.</div>`}
+
       <div class="section-title">Ageing (in-stock units)</div>
       <div class="card"><div class="grid-2">
         ${Object.entries(buckets).map(([k, v]) => `<div class="row between"><span>${k} days</span><b>${v}</b></div>`).join('')}
