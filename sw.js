@@ -1,10 +1,11 @@
 /* Minimal offline-first service worker: cache the app shell so it
    opens instantly and works with no network, once first loaded. */
-const CACHE = 'stockbill-v6';
+const CACHE = 'stockbill-v7';
 const ASSETS = [
   './', './index.html', './styles.css', './db.js',
   './core.js', './data.js', './pdf.js', './backup.js', './home.js', './settings.js',
   './suppliers.js', './customers.js', './items.js', './inventory.js', './vendors.js', './sell.js',
+  './delivery.js', './notes.js',
   './dashboard.js', './main.js', './lib/jspdf.umd.min.js',
   './manifest.json', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png'
 ];

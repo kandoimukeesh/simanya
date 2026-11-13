@@ -13,8 +13,10 @@ SCREENS.settings = async (view) => {
     <label>Currency symbol</label><input id="currencySymbol" value="${esc(s.currencySymbol)}" style="max-width:80px" />
 
     <div class="section-title">Billing rules</div>
-    <label>Default markup over cost (%) — used to suggest a sell price for a new SKU</label>
+    <label>Default markup over cost (%) — used to suggest a Selling Price for a new SKU</label>
     <input id="markupPercent" type="number" value="${s.markupPercent}" />
+    <label>Default wholesale markup over cost (%) — used to suggest a Wholesale Price for a new SKU</label>
+    <input id="wholesaleMarkupPercent" type="number" value="${s.wholesaleMarkupPercent}" />
     <label>Vendor credit period (days before a bill counts as overdue)</label>
     <input id="vendorCreditDays" type="number" value="${s.vendorCreditDays}" />
     <label>Ageing warning threshold (days)</label>
@@ -24,6 +26,12 @@ SCREENS.settings = async (view) => {
 
     <div class="section-title">Loyalty programme</div>
     <p class="helptext">Every customer bill earns points automatically. Points can later be redeemed as a discount on a future bill, capped at a percentage of that bill so redemption never wipes out a sale.</p>
+    <label>Applies to which billing type(s)?</label>
+    <div class="btn-row">
+      <label class="row" style="gap:6px;font-weight:400"><input type="checkbox" id="loyTrading" style="width:auto" ${s.loyaltyEligibleSaleTypes.includes('trading') ? 'checked' : ''} /> Trading</label>
+      <label class="row" style="gap:6px;font-weight:400"><input type="checkbox" id="loyTailoring" style="width:auto" ${s.loyaltyEligibleSaleTypes.includes('tailoring') ? 'checked' : ''} /> Tailoring</label>
+    </div>
+    <p class="helptext">Unticked billing types neither earn nor redeem Loyalty points. Tailoring is excluded by default.</p>
     <label>Points earned — % of bill amount</label>
     <input id="loyaltyAccrualPercent" type="number" min="0" step="0.1" value="${s.loyaltyAccrualPercent}" />
     <label>Redemption value — ₹ per point</label>
@@ -44,9 +52,14 @@ SCREENS.settings = async (view) => {
       businessName: $('#businessName').value.trim() || 'My Apparel Store',
       currencySymbol: $('#currencySymbol').value || '₹',
       markupPercent: parseFloat($('#markupPercent').value) || 0,
+      wholesaleMarkupPercent: parseFloat($('#wholesaleMarkupPercent').value) || 0,
       vendorCreditDays: parseInt($('#vendorCreditDays').value, 10) || 30,
       agingWarnDays: parseInt($('#agingWarnDays').value, 10) || 60,
       agingCriticalDays: parseInt($('#agingCriticalDays').value, 10) || 90,
+      loyaltyEligibleSaleTypes: [
+        ...($('#loyTrading').checked ? ['trading'] : []),
+        ...($('#loyTailoring').checked ? ['tailoring'] : [])
+      ],
       loyaltyAccrualPercent: Math.max(0, parseFloat($('#loyaltyAccrualPercent').value) || 0),
       loyaltyRedemptionValue: Math.max(0, parseFloat($('#loyaltyRedemptionValue').value) || 0),
       loyaltyRedemptionCapPercent: Math.min(100, Math.max(0, parseFloat($('#loyaltyRedemptionCapPercent').value) || 0)),

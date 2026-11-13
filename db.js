@@ -14,10 +14,20 @@
    now issues a numbered ₹ credit note (separate from Loyalty points)
    that can be applied toward one or more future bills. Purely
    additive; no existing data is touched.
+
+   v4 schema change: adds "itemTypes" (the 3-letter Item Type part of
+   the SKU, created as part of Item Master) and "debitNotes" (the
+   vendor-return mirror of creditNotes — see data.js). Purely additive;
+   every existing store/record is untouched and needs no migration,
+   since IndexedDB records are schemaless — new fields on suppliers
+   (vendorCode), items (vendorId/itemTypeId/freeCode/category/
+   wholesalePrice), vendorInvoices (otherCharges) and customerInvoices
+   lines (note/expectedDeliveryDate/deliveryStatus/statusHistory)
+   simply don't exist on old rows until that row is next saved.
    ============================================================ */
 
 const DB_NAME = 'apparelBizDB';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 const STORES = {
   settings:        { keyPath: 'id' },
@@ -38,6 +48,19 @@ const STORES = {
   creditNotes:     { keyPath: 'id', indexes: [
                         ['customerId', 'customerId', { unique: false }],
                         ['invoiceId', 'invoiceId', { unique: false }],
+                        ['status', 'status', { unique: false }]
+                      ] },
+  // v4: the 3-letter Item Type used in SKU composition (e.g. "Kurta Pant" -> KPN).
+  // Created inline from Item Master, like suppliers; code must be unique.
+  itemTypes:       { keyPath: 'id', indexes: [
+                        ['code', 'code', { unique: true }],
+                        ['description', 'description', { unique: false }]
+                      ] },
+  // v4: the vendor-return mirror of creditNotes — a formal numbered Debit Note
+  // issued whenever stock is returned to a vendor (see addVendorReturn in data.js).
+  debitNotes:      { keyPath: 'id', indexes: [
+                        ['supplierId', 'supplierId', { unique: false }],
+                        ['vendorInvoiceId', 'vendorInvoiceId', { unique: false }],
                         ['status', 'status', { unique: false }]
                       ] },
   counters:        { keyPath: 'id' }
@@ -72,6 +95,8 @@ function openDB() {
       }
       // v2 -> v3: purely additive (the new `creditNotes` store, created above by
       // the generic loop) — no existing data is touched or cleared.
+      // v3 -> v4: purely additive (the new `itemTypes`/`debitNotes` stores,
+      // created above by the generic loop) — no existing data is touched.
     };
     req.onsuccess = (e) => resolve(e.target.result);
     req.onerror = (e) => reject(e.target.error);

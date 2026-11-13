@@ -9,13 +9,16 @@
 
 SCREENS.inventory = async (view, params) => {
   setTitle('Inventory');
-  const [batches, items, suppliers] = await Promise.all([listInventory({ inStockOnly: true }), listItems(), listSuppliers()]);
+  // Only Trading items ever carry stock — Service/Raw-material SKUs are never
+  // batched, so they simply never appear here.
+  const [batches, items, suppliers] = await Promise.all([listInventory({ inStockOnly: true }), listItems({ category: 'trading' }), listSuppliers()]);
   const itemById = Object.fromEntries(items.map(i => [i.id, i]));
   const supplierById = Object.fromEntries(suppliers.map(s => [s.id, s]));
 
   // group remaining stock by item
   const groups = {};
   for (const b of batches) {
+    if (!itemById[b.itemId]) continue;
     if (!groups[b.itemId]) groups[b.itemId] = { itemId: b.itemId, qty: 0, oldest: b.purchaseDate, batches: [] };
     const g = groups[b.itemId];
     g.qty += b.qtyRemaining;
@@ -43,13 +46,13 @@ SCREENS.inventory = async (view, params) => {
       return sup || (it && (it.sku.toLowerCase().includes(ft) || it.description.toLowerCase().includes(ft)));
     });
     if (!rows.length) { wrap.innerHTML = `<div class="empty"><div class="big" style="color:var(--gold-deep)">${icon('box',40)}</div>No stock on hand.<br>Tap the + button to record a purchase.</div>`; return; }
-    wrap.innerHTML = rows.map(g => {
+    wrap.innerHTML = rows.map((g, gi) => {
       const it = itemById[g.itemId] || { sku: '—', description: 'Unknown item', sellPrice: null };
       const age = daysSince(g.oldest);
       const ageBadge = age >= SETTINGS.agingCriticalDays ? 'danger' : age >= SETTINGS.agingWarnDays ? 'warn' : 'ok';
       const supplierNames = [...new Set(g.batches.map(b => supplierById[b.supplierId]?.name).filter(Boolean))];
       return `
-      <div class="card">
+      <div class="card" data-gi="${gi}">
         <div class="row between">
           <div>
             <div style="font-weight:700">${esc(it.description)}</div>
@@ -60,14 +63,68 @@ SCREENS.inventory = async (view, params) => {
             <span class="badge ${ageBadge}">oldest ${age}d</span>
           </div>
         </div>
-        <div class="sub" style="margin-top:4px">Sell ${fmtMoney(it.sellPrice)} · Avg cost ${fmtMoney(round2(g.batches.reduce((s,b)=>s+b.qtyRemaining*b.costPrice,0) / (g.qty||1)))}</div>
+        <div class="sub avgCostLine" data-itemid="${g.itemId}" style="margin-top:4px">Sell ${fmtMoney(it.sellPrice)} · Avg cost …</div>
       </div>`;
     }).join('');
+    // Avg cost needs the invoice's other-charges allocation (async) — fill in after paint.
+    $$('.avgCostLine', wrap).forEach(async (el) => {
+      const it = itemById[el.dataset.itemid];
+      const avg = await stockAvgLandedCost(el.dataset.itemid);
+      el.textContent = `Sell ${fmtMoney(it?.sellPrice)} · Avg cost (landed) ${fmtMoney(avg)}`;
+    });
+    $$('.card[data-gi]', wrap).forEach(el => el.onclick = () => Nav.push('itemInventoryDetail', { itemId: rows[parseInt(el.dataset.gi, 10)].itemId }));
   }
   renderGroups('');
   $('#searchBox').oninput = (e) => renderGroups(e.target.value);
 
   addFab('+', () => startCaptureFlow());
+};
+
+// SKU-level detail: avg landed cost + an invoice-wise (batch-wise) breakdown —
+// purchase cost, the invoice's allocated other-charge per unit, landed cost, and
+// qty remaining for each batch, grouped by the purchase invoice it came from.
+SCREENS.itemInventoryDetail = async (view, params) => {
+  const item = await getItem(params.itemId);
+  setTitle(item?.description || 'Item');
+  removeFab();
+  const [batches, suppliers] = await Promise.all([listInventory({ itemId: params.itemId }), listSuppliers()]);
+  const supplierById = Object.fromEntries(suppliers.map(s => [s.id, s]));
+  const avgLanded = await stockAvgLandedCost(params.itemId);
+  const totalRemaining = batches.reduce((s, b) => s + (b.qtyRemaining || 0), 0);
+
+  const rowsHtml = [];
+  for (const b of batches) {
+    const { perUnitAllocation, otherChargesTotal } = await getVendorInvoiceAllocation(b.invoiceKey);
+    const landed = batchLandedCost(b, perUnitAllocation);
+    rowsHtml.push(`
+      <div class="card">
+        <div class="row between">
+          <div><div style="font-weight:700">Invoice ${esc(b.invoiceNumber)}</div><div class="sub">${fmtDate(b.invoiceDate)} · ${esc(supplierById[b.supplierId]?.name || '—')}</div></div>
+          <span class="badge ${b.qtyRemaining > 0 ? 'ok' : 'neutral'}">${b.qtyRemaining} left of ${b.qtyReceived}</span>
+        </div>
+        <div class="grid-3" style="text-align:center;margin-top:8px">
+          <div><div class="sub">Purchase cost</div><b>${fmtMoney(b.costPrice)}</b></div>
+          <div><div class="sub">Allocated charge</div><b>${perUnitAllocation ? '+' + fmtMoney(perUnitAllocation) : '—'}</b></div>
+          <div><div class="sub">Landed cost</div><b>${fmtMoney(landed)}</b></div>
+        </div>
+        ${otherChargesTotal ? `<div class="sub" style="margin-top:6px">Invoice other charges: ${fmtMoney(otherChargesTotal)} spread over this invoice's pieces</div>` : ''}
+      </div>
+    `);
+  }
+
+  view.innerHTML = `
+    <div class="card">
+      <div class="row between"><b>${esc(item?.description || '')}</b><span class="tag">${esc(item?.sku || '')}</span></div>
+      <div class="sub">${item?.category === 'service' ? 'Service / Raw material' : 'Trading item'}</div>
+    </div>
+    <div class="stat-grid" style="margin:10px 0">
+      <div class="stat"><div class="num">${totalRemaining}</div><div class="lbl">In stock</div></div>
+      <div class="stat"><div class="num">${fmtMoney(avgLanded)}</div><div class="lbl">Avg cost (landed)</div></div>
+      <div class="stat"><div class="num">${fmtMoney(item?.sellPrice)}</div><div class="lbl">Sell price</div></div>
+    </div>
+    <div class="section-title">Batches — invoice-wise</div>
+    ${rowsHtml.length ? rowsHtml.join('') : '<div class="empty">No purchase history for this SKU.</div>'}
+  `;
 };
 
 async function startCaptureFlow() {
@@ -103,7 +160,9 @@ async function runCaptureSession(supplier, invoiceNumber, invoiceDate) {
   let count = 0, totalCost = 0;
 
   async function pickItemStep() {
-    const items = await listItems({ activeOnly: true });
+    // Service/Raw-material items are never stock-tracked, so they never show up
+    // here — only Trading items can be purchased into inventory.
+    const items = await listItems({ activeOnly: true, category: 'trading' });
     openSearchOrAddSheet({
       title: 'Search SKU to add',
       items,

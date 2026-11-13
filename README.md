@@ -11,32 +11,51 @@ launcher shape.
 
 ## What's inside
 
-- **Item / SKU Master** — create and maintain your own SKUs manually (code, description, cost
-  price, sell price). No camera or OCR tag-scanning anywhere in the app — every SKU, purchase, and
-  bill line is entered by typing or by searching.
-- **Purchase Entry & Stock (batch/lot inventory)** — pick/add a supplier, enter the mandatory
-  invoice number + date, then add purchase lines by **searching the Item Master** and typing a
-  quantity + cost price. Each line becomes one stock "batch." Stock on hand per SKU is the sum of
-  its batches' remaining quantity (not tracked piece-by-piece), and sales consume the **oldest
-  batch first (FIFO)** — which is also what drives the ageing display.
-- **Vendor billing** — per supplier invoice: enter the bill amount, log payments (mode + amount),
-  apply a final-settlement discount/adjustment, record returns to the vendor (type a quantity per
-  batch — no scanning), and see the running balance and days overdue against your configured
-  credit period.
-- **Customer billing** — search/add a customer (phone, Instagram ID, delivery address), then bill
-  by **typing to search** the Item Master (or add a one-off manual line). Attach up to 3 photos for
-  alteration notes, and the bill number auto-generates as `DDMMYYYY` + a daily sequence + `T`
-  (Trading) or `D` (Tailoring/Designing). Download or WhatsApp-share any invoice as a PDF, straight
-  from its detail screen.
-- **Loyalty Programme** — every completed sale earns points automatically (a configurable % of the
-  bill amount). Points can be redeemed as a bill discount at a configurable ₹-per-point value,
-  capped at a configurable % of the current bill so redemption never wipes out a sale. Every
-  earn/redeem/return-adjustment is kept in a per-customer ledger.
-- **Customer returns & Credit Notes** — recording a return against a bill (qty-based, no scanning)
-  always issues a numbered Credit Note — a running ₹ credit, separate from Loyalty points, that can
-  later be applied toward any future bill for that customer (in full or split across several), and
-  claws back the Loyalty points that were earned on the returned amount. Each Credit Note can be
-  downloaded/shared as its own PDF too.
+- **Item / SKU Master** — every SKU is composed automatically from three parts: a 3-letter
+  **Vendor Code** (set when you create the vendor, duplicate-checked), a 3-letter **Item Type
+  code** (e.g. "Kurta Pant" → `KPN`, duplicate-checked, managed under More ▸ Item Types), and a
+  6-character alphanumeric free-text code you type (auto-capitalised). Each SKU carries Cost
+  Price, Wholesale Price and Selling Price (Wholesale/Selling auto-suggest from Cost using your
+  configured markup %, fully overridable), and is tagged **Trading Item** or **Raw material /
+  Service Charges** — service items skip stock-tracking entirely (no batches, no "in stock",
+  never consumed by FIFO). No camera or OCR tag-scanning anywhere in the app.
+- **Vendors (purchasing lives here)** — there's no separate "Purchase" tab: recording a purchase
+  starts from the Vendors tab (or from inside a vendor's own page). Pick/add a vendor, enter the
+  mandatory invoice number + date, then add purchase lines by **searching the Item Master** and
+  typing a quantity + cost price (Trading items only — service items never show up here). Each
+  line becomes one stock "batch," consumed **oldest-first (FIFO)** by sales. A purchase invoice
+  can also carry **any other charges applicable** (freight, handling, …) — spread **equally per
+  unit** across every piece received on that invoice, so each SKU's landed cost = its own cost +
+  that per-unit allocation. Vendor billing itself (bill amount, payments, final-settlement
+  discount/adjustment) stays on the same screen, and a **Debit Note** is issued automatically
+  every time stock is returned to a vendor.
+- **Inventory** — stock on hand per SKU (Trading items only), with **Avg Cost shown as the
+  landed cost** (purchase cost + allocated other-charges), and an invoice-wise batch breakdown
+  tapping through to each batch's own purchase cost, allocated charge, landed cost and remaining
+  quantity.
+- **Customer billing** — search/add a customer, then bill by **typing to search** the Item Master
+  (description or SKU) or add a one-off manual/"additional charge" line. Selling Price
+  auto-populates and is editable per line and at the overall/final-amount level. Stock on hand is
+  shown to you while billing but never printed on the customer-facing invoice. Each line has its
+  own optional **Additional information** note, and — for Tailoring bills — its own **Expected
+  Delivery Date**. A tailoring/alteration charge can also be **added onto an already-finalized
+  bill** (e.g. an alteration on an item sold earlier), tagging that bill directly. Attach up to 3
+  photos for alteration notes, and the bill number auto-generates as `DDMMYYYY` + a daily
+  sequence + `T` (Trading) or `D` (Tailoring). Download or WhatsApp-share any invoice as a PDF.
+- **Tailoring / Delivery tracking** — every tailoring line carries an 8-stage status (Pending →
+  Designing → Cutting → Tailoring → Fitting → Ready for Trial → Complete → Delivered), each
+  date-stamped. The **Delivery Pending** panel (More ▸ Delivery Pending, also surfaced on Home)
+  groups every not-yet-delivered item **date-wise**, showing item count and ₹ value per date, and
+  taps straight through to that bill. Update a status and optionally send the customer a short,
+  light **WhatsApp** update — pick English / हिंदी / বাংলা right before sending.
+- **Loyalty Programme** — configurable per billing type under Settings (Trading / Tailoring) —
+  Tailoring is excluded by default. Eligible sales earn points automatically (a configurable % of
+  the bill amount); points redeem as a bill discount at a configurable ₹-per-point value, capped
+  at a configurable % of the current bill. Every earn/redeem/return-adjustment is kept in a
+  per-customer ledger.
+- **Customer returns, Credit Notes & Debit Notes** — a customer return always issues a numbered
+  Credit Note (claws back Loyalty points proportionally); a vendor return always issues a numbered
+  Debit Note. **More ▸ Credit / Debit Notes** lists both together, newest first.
 - **Customer-wise transaction view** — tap any customer to see their profile, points balance +
   ledger, every Credit Note they've been issued, and every bill they've ever been billed, with
   running balances.

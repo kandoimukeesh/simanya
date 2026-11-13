@@ -8,10 +8,10 @@
 
 SCREENS.vendors = async (view) => {
   setTitle('Vendors & Billing');
-  removeFab();
+  addFab('+', () => startCaptureFlow());
   const [suppliers, vendorInvoices] = await Promise.all([listSuppliers(), listVendorInvoices()]);
   if (!suppliers.length) {
-    view.innerHTML = `<div class="empty"><div class="big" style="color:var(--gold-deep)">${icon('factory',40)}</div>No suppliers yet.<br>Add one from Inventory.</div>`;
+    view.innerHTML = `<div class="empty"><div class="big" style="color:var(--gold-deep)">${icon('factory',40)}</div>No vendors yet.<br>Tap + to record a purchase — adding a vendor is the first step.</div>`;
     return;
   }
   const bySupplier = {};
@@ -47,8 +47,8 @@ SCREENS.vendors = async (view) => {
 
 SCREENS.supplierDetail = async (view, params) => {
   const supplier = await DB.get('suppliers', params.supplierId);
-  setTitle(supplier?.name || 'Supplier');
-  removeFab();
+  setTitle(supplier?.name || 'Vendor');
+  addFab('+', () => captureFlowStep2(supplier));
   const vendorInvoices = (await listVendorInvoices()).filter(v => v.supplierId === params.supplierId).sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate));
   const rowsHtml = [];
   for (const vi of vendorInvoices) {
@@ -75,7 +75,7 @@ SCREENS.supplierDetail = async (view, params) => {
   }
   view.innerHTML = `
     <div class="card row between">
-      <div><div class="sub">Phone</div><b>${esc(supplier?.phone || '—')}</b></div>
+      <div><div class="sub">Vendor code · Phone</div><b><span class="tag">${esc(supplier?.vendorCode || '—')}</span> ${esc(supplier?.phone || '—')}</b></div>
       <button class="btn ghost sm" id="editSup">Edit</button>
     </div>
     <div class="section-title">Purchase invoices</div>
@@ -97,6 +97,7 @@ function drawVendorInvoiceSheet(vi, costTotal) {
   const returnsCredit = vendorInvoiceReturnsCredit(vi);
   const adjTotal = vendorInvoiceAdjustmentTotal(vi);
   const net = vendorInvoiceNet(vi, costTotal);
+  const otherChargesTotal = vendorInvoiceOtherChargesTotal(vi);
 
   const sheet = openSheet(`
     <h2>Invoice ${esc(vi.invoiceNumber)}</h2>
@@ -110,6 +111,16 @@ function drawVendorInvoiceSheet(vi, costTotal) {
     <label>Bill amount (vendor's invoice total)</label>
     <input id="billAmt" type="number" inputmode="decimal" value="${vi.billAmount ?? costTotal}" />
     <button class="btn secondary sm" id="saveBillAmt" style="margin-top:8px;width:100%">Save bill amount</button>
+
+    <div class="divider"></div>
+    <div class="section-title" style="margin-top:0">Any other charges applicable</div>
+    <p class="helptext">Freight, handling, etc. — spread equally per unit across every piece on this invoice to work out each SKU's landed cost (see Inventory). This does NOT change the Bill Amount above.</p>
+    <div class="grid-2">
+      <div><label>Amount</label><input id="ocAmt" type="number" inputmode="decimal" placeholder="0" /></div>
+      <div><label>Note</label><input id="ocNote" placeholder="e.g. freight" /></div>
+    </div>
+    <button class="btn secondary" id="addOtherCharge" style="margin-top:8px">Add charge</button>
+    ${(vi.otherCharges || []).length ? `<div style="margin-top:8px">${vi.otherCharges.map(c => `<div class="row between" style="padding:6px 0;border-bottom:1px solid var(--border)"><span>${fmtDate(c.date)} · ${esc(c.note || '—')}</span><b>${fmtMoney(c.amount)}</b></div>`).join('')}<div class="row between" style="padding-top:6px"><span>Total other charges</span><b>${fmtMoney(otherChargesTotal)}</b></div></div>` : ''}
 
     <div class="divider"></div>
     <div class="section-title" style="margin-top:0">Record a payment</div>
@@ -137,7 +148,7 @@ function drawVendorInvoiceSheet(vi, costTotal) {
 
     <div class="divider"></div>
     <div class="section-title" style="margin-top:0">Returns to vendor</div>
-    ${(vi.returns || []).length ? `<div style="margin-bottom:8px">${vi.returns.map(r => `<div class="row between" style="padding:6px 0;border-bottom:1px solid var(--border)"><span>${fmtDate(r.date)} · ${r.lines.length} line${r.lines.length===1?'':'s'}${r.note ? ' · ' + esc(r.note) : ''}</span><b>${fmtMoney(r.creditAmount)}</b></div>`).join('')}</div>` : '<div class="sub" style="margin-bottom:8px">No returns yet.</div>'}
+    ${(vi.returns || []).length ? `<div style="margin-bottom:8px">${vi.returns.map(r => `<div class="row between" style="padding:6px 0;border-bottom:1px solid var(--border)"><span>${fmtDate(r.date)} · ${r.lines.length} line${r.lines.length===1?'':'s'}${r.note ? ' · ' + esc(r.note) : ''}<br><span class="tag">${esc(r.dnNumber || '')}</span></span><b>${fmtMoney(r.creditAmount)}</b></div>`).join('')}</div>` : '<div class="sub" style="margin-bottom:8px">No returns yet.</div>'}
     <button class="btn secondary" id="recordReturn">+ Record return</button>
   `);
   $('#saveBillAmt', sheet).onclick = async () => {
@@ -161,6 +172,13 @@ function drawVendorInvoiceSheet(vi, costTotal) {
     await addVendorAdjustment(vi, amt, $('#adjNote', sheet).value.trim());
     toast('Adjustment applied');
     closeSheet(); render();
+  };
+  $('#addOtherCharge', sheet).onclick = async () => {
+    try {
+      await addVendorOtherCharge(vi, $('#ocAmt', sheet).value, $('#ocNote', sheet).value.trim());
+      toast('Charge added — landed cost updated in Inventory');
+      closeSheet(); render();
+    } catch (err) { toast(err.message || 'Could not add charge'); }
   };
   $('#recordReturn', sheet).onclick = async () => {
     const [eligible, items] = await Promise.all([
@@ -219,8 +237,8 @@ function openVendorReturnFlow(vi, eligibleBatches, items, onDone) {
         .filter(b => qtyById[b.id] > 0)
         .map(b => ({ batch: b, qty: qtyById[b.id] }));
       if (!returnLines.length) return;
-      await addVendorReturn(vi, returnLines, $('#retNote', sheet).value.trim());
-      toast('Return recorded');
+      const { debitNote } = await addVendorReturn(vi, returnLines, $('#retNote', sheet).value.trim());
+      toast(`Return recorded — Debit Note ${debitNote.dnNumber} issued for ${fmtMoney(debitNote.amount)}`, 3500);
       closeSheet();
       onDone && onDone();
     };

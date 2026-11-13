@@ -66,7 +66,20 @@ function drawCustomerInvoiceDetail(ci, customer, view) {
       <div class="sub">${customer?.address ? esc(customer.address) : ''}</div>
     </div>
     <div class="section-title">Items (${ci.lines.length})</div>
-    ${ci.lines.map(l => `<div class="line-item row between"><span><span class="tag">${esc(l.sku || 'manual')}</span> ${esc(l.description || '')} × ${l.qty}</span><b>${fmtMoney(l.sellAmount)}</b></div>`).join('')}
+    ${ci.lines.map((l, idx) => `
+      <div class="line-item" data-lineidx="${idx}">
+        <div class="row between">
+          <span>Item ${idx+1} · <span class="tag">${esc(l.sku || 'manual')}</span> ${esc(l.description || '')} × ${l.qty}</span>
+          <b>${fmtMoney(l.sellAmount)}</b>
+        </div>
+        ${l.note ? `<div class="sub" style="margin-top:2px">${icon('doc',12)} ${esc(l.note)}</div>` : ''}
+        ${l.expectedDeliveryDate ? `
+          <div class="row between" style="margin-top:6px">
+            <div class="sub">${icon('box',12)} Due ${fmtDate(l.expectedDeliveryDate)} · <span class="badge ${l.deliveryStatus === 'Delivered' ? 'ok' : l.deliveryStatus === 'Complete' ? 'ok' : 'warn'}">${esc(l.deliveryStatus || 'Pending')}</span></div>
+            <button class="btn ghost sm deliveryUpdateBtn" data-lineidx="${idx}">Update</button>
+          </div>` : ''}
+      </div>`).join('')}
+    <button class="btn ghost sm" id="addTailorLine" style="width:100%;margin:6px 0">${icon('box',14)} Add tailoring / alteration item to this bill</button>
     <div class="card">
       <div class="row between"><span>Subtotal</span><b>${fmtMoney(ci.subtotal)}</b></div>
       <div class="row between"><span>Final amount</span><b>${fmtMoney(ci.finalAmount)}</b></div>
@@ -137,6 +150,103 @@ function drawCustomerInvoiceDetail(ci, customer, view) {
       const freshCustomer = await DB.get('customers', customer.id);
       drawCustomerInvoiceDetail(fresh, freshCustomer, view);
     });
+  };
+  $('#addTailorLine').onclick = () => {
+    openTailoringAddFlow(ci, customer, async () => {
+      const fresh = await DB.get('customerInvoices', ci.id);
+      drawCustomerInvoiceDetail(fresh, customer, view);
+    });
+  };
+  $$('.deliveryUpdateBtn', view).forEach(btn => btn.onclick = (e) => {
+    e.stopPropagation();
+    openDeliveryStatusSheet(ci, customer, parseInt(btn.dataset.lineidx, 10), async () => {
+      const fresh = await DB.get('customerInvoices', ci.id);
+      drawCustomerInvoiceDetail(fresh, customer, view);
+    });
+  });
+}
+
+// Lets a tailoring charge (any Item Master SKU, usually category 'service') be
+// added onto an ALREADY-FINALIZED invoice — the "alteration on an already-sold
+// item" flow. Shows the item's own cost/price if one is associated, editable here.
+function openTailoringAddFlow(ci, customer, onDone) {
+  async function pickStep() {
+    const items = await listItems({ activeOnly: true });
+    openSearchOrAddSheet({
+      title: 'Search tailoring / item to add',
+      items,
+      searchText: (i) => `${i.sku} ${i.description}`,
+      placeholder: 'Type SKU or description…',
+      emptyHint: 'No match found.',
+      onAddNew: null,
+      renderItem: (i) => `<div class="avatar">${esc((i.description[0]||'?').toUpperCase())}</div><div class="main"><div class="title">${esc(i.description)}</div><div class="sub"><span class="tag">${esc(i.sku)}</span></div></div><div class="end"><b>${fmtMoney(i.sellPrice)}</b></div>`,
+      onPick: (item) => detailStep(item)
+    });
+  }
+  function detailStep(item) {
+    const sheet = openSheet(`
+      <h2>${esc(item.description)}</h2>
+      <p class="helptext"><span class="tag">${esc(item.sku)}</span>${item.costPrice ? ` · cost ${fmtMoney(item.costPrice)}` : ''}</p>
+      <div class="grid-2">
+        <div><label>Quantity *</label><input id="qty" type="number" min="1" value="1" /></div>
+        <div><label>Charge (total) *</label><input id="sell" type="number" inputmode="decimal" value="${item.sellPrice || 0}" /></div>
+      </div>
+      <label style="margin-top:8px">Additional information (optional)</label>
+      <input id="note" placeholder="e.g. alteration note" />
+      <label style="margin-top:8px">Expected delivery date</label>
+      <input id="deliveryDate" type="date" value="${todayISO()}" style="max-width:160px" />
+      <button class="btn" id="addLine" style="margin-top:14px">Add to this bill</button>
+    `);
+    $('#addLine', sheet).onclick = async () => {
+      const qty = parseInt($('#qty', sheet).value, 10);
+      const sellAmount = parseFloat($('#sell', sheet).value);
+      if (!qty || qty <= 0) { toast('Enter a valid quantity'); return; }
+      if (isNaN(sellAmount) || sellAmount < 0) { toast('Enter a valid amount'); return; }
+      const line = { itemId: item.id, sku: item.sku, description: item.description, qty, sellAmount, note: $('#note', sheet).value.trim(), expectedDeliveryDate: $('#deliveryDate', sheet).value || todayISO() };
+      setLineDeliveryStatus(line, 'Pending');
+      await addTailoringLineToInvoice(ci, line);
+      toast('Tailoring item added to bill');
+      closeSheet();
+      onDone && onDone();
+    };
+  }
+  pickStep();
+}
+
+// Advance a line's delivery status (date-stamped) and optionally send the
+// customer a short WhatsApp update — language chosen right here, at send time.
+function openDeliveryStatusSheet(ci, customer, lineIdx, onDone) {
+  const line = ci.lines[lineIdx];
+  let lang = 'en';
+  const sheet = openSheet(`
+    <h2>Update delivery status</h2>
+    <p class="helptext">${esc(line.description || '')} · Item ${lineIdx+1} of bill ${esc(ci.billNumber)}</p>
+    <label>Status</label>
+    <select id="statusSel">${DELIVERY_STATUSES.map(s => `<option value="${esc(s)}" ${s===(line.deliveryStatus||'Pending')?'selected':''}>${esc(s)}</option>`).join('')}</select>
+    <button class="btn" id="saveStatus" style="margin-top:10px">Save status</button>
+    ${(line.statusHistory||[]).length ? `<div class="section-title">History</div>${line.statusHistory.map(h => `<div class="row between" style="padding:4px 0;border-bottom:1px solid var(--border)"><span>${esc(h.status)}</span><span class="sub">${fmtDate(h.date)}</span></div>`).join('')}` : ''}
+    <div class="divider"></div>
+    <div class="section-title" style="margin-top:0">${icon('invoice',13)} Notify customer on WhatsApp</div>
+    <p class="helptext">A short message is sent for the status currently selected above. Pick a language just before sending.</p>
+    <div class="btn-row">
+      <button class="btn ${lang==='en'?'':'secondary'} sm langBtn" data-lang="en">English</button>
+      <button class="btn ${lang==='hi'?'':'secondary'} sm langBtn" data-lang="hi">हिंदी</button>
+      <button class="btn ${lang==='bn'?'':'secondary'} sm langBtn" data-lang="bn">বাংলা</button>
+    </div>
+    <button class="btn secondary" id="sendWa" style="margin-top:10px">${icon('invoice',14)} Send WhatsApp update</button>
+  `);
+  $$('.langBtn', sheet).forEach(btn => btn.onclick = () => { lang = btn.dataset.lang; $$('.langBtn', sheet).forEach(b => b.className = `btn ${b.dataset.lang===lang?'':'secondary'} sm langBtn`); });
+  $('#saveStatus', sheet).onclick = async () => {
+    setLineDeliveryStatus(line, $('#statusSel', sheet).value);
+    await DB.put('customerInvoices', ci);
+    toast('Status updated');
+    closeSheet();
+    onDone && onDone();
+  };
+  $('#sendWa', sheet).onclick = () => {
+    const status = $('#statusSel', sheet).value;
+    const msg = buildDeliveryWaMessage(lang, status, { name: customer?.name, item: line.description, bill: ci.billNumber });
+    window.open(waLinkFor(customer?.phone, msg), '_blank');
   };
 }
 
@@ -222,7 +332,7 @@ function saleFlowChooseType(customer) {
 }
 
 async function runSaleCart(customer, saleType) {
-  const cart = []; // {itemId, sku, description, qty, sellAmount}
+  const cart = []; // {itemId, sku, description, qty, sellAmount, note, expectedDeliveryDate, deliveryStatus, statusHistory}
   const photos = [];
   let redeemPts = 0;
   let cnApply = 0;
@@ -241,14 +351,21 @@ async function runSaleCart(customer, saleType) {
       <div id="lines">${cart.length ? cart.map((l, idx) => `
         <div class="line-item" data-idx="${idx}">
           <div class="row between">
-            <div><div style="font-weight:700">${esc(l.description)}</div><div class="sub"><span class="tag">${esc(l.sku)}</span> × ${l.qty}</div></div>
+            <div><div style="font-weight:700">Item ${idx+1} · ${esc(l.description)}</div><div class="sub"><span class="tag">${esc(l.sku || 'manual')}</span> × ${l.qty}</div></div>
             <button class="btn danger sm removeLine" data-idx="${idx}">${icon('close',12)}</button>
           </div>
           <label style="margin:8px 0 2px">Sell amount (total for ${l.qty})</label>
           <input type="number" class="sellEdit" data-idx="${idx}" value="${l.sellAmount}" />
+          <label style="margin:6px 0 2px">Additional information (optional)</label>
+          <input class="noteEdit" data-idx="${idx}" value="${esc(l.note || '')}" placeholder="e.g. neckline alteration note" />
+          ${saleType === 'tailoring' ? `
+          <label style="margin:6px 0 2px">Expected delivery date</label>
+          <input type="date" class="deliveryEdit" data-idx="${idx}" value="${l.expectedDeliveryDate || todayISO()}" style="max-width:160px" />
+          ` : ''}
         </div>`).join('') : '<div class="empty">No items added yet.</div>'}</div>
       <button class="btn secondary" id="addItem" style="margin-top:8px">${icon('search',14)} Add item</button>
       <button class="btn secondary" id="manualLine" style="margin-top:8px">+ Add manual line</button>
+      <button class="btn secondary" id="chargeLine" style="margin-top:8px">${icon('invoice',14)} Additional charge applicable</button>
 
       <div class="divider"></div>
       <div class="row between"><span>Subtotal</span><b id="subtotalDisp">${fmtMoney(subtotal)}</b></div>
@@ -283,6 +400,8 @@ async function runSaleCart(customer, saleType) {
       $('#finalAmt', sheet).value = st;
     }
     $$('.sellEdit', sheet).forEach(inp => inp.oninput = () => { cart[inp.dataset.idx].sellAmount = parseFloat(inp.value) || 0; syncTotals(); });
+    $$('.noteEdit', sheet).forEach(inp => inp.oninput = () => { cart[inp.dataset.idx].note = inp.value; });
+    $$('.deliveryEdit', sheet).forEach(inp => inp.oninput = () => { cart[inp.dataset.idx].expectedDeliveryDate = inp.value; });
     $$('.removeLine', sheet).forEach(btn => btn.onclick = () => { cart.splice(btn.dataset.idx, 1); closeSheet(); cartSheet(); });
     $('#redeemPts', sheet)?.addEventListener('input', (e) => { redeemPts = Math.max(0, Math.min(parseInt(e.target.value, 10) || 0, maxRedeemPts)); e.target.value = redeemPts; });
     $('#cnApply', sheet)?.addEventListener('input', (e) => { cnApply = Math.max(0, Math.min(parseFloat(e.target.value) || 0, cnMax)); e.target.value = cnApply; });
@@ -290,6 +409,10 @@ async function runSaleCart(customer, saleType) {
     $('#manualLine', sheet).onclick = () => {
       closeSheet();
       openManualLineForm((line) => { cart.push(line); cartSheet(); });
+    };
+    $('#chargeLine', sheet).onclick = () => {
+      closeSheet();
+      openManualLineForm((line) => { cart.push(line); cartSheet(); }, { heading: 'Additional charge', descPlaceholder: 'e.g. Delivery charge / Packing charge', presets: ['Delivery charge', 'Packing charge', 'Alteration charge', 'Handling charge'] });
     };
     $('#addPhoto', sheet)?.addEventListener('click', async () => {
       const shot = await openCamera({ hint: 'Photo for alteration reference', guides: false });
@@ -319,14 +442,18 @@ async function runSaleCart(customer, saleType) {
   }
 
   async function qtyPriceStep(item) {
-    const onHand = await stockOnHand(item.id);
+    const isService = itemCategory(item) === 'service';
+    const onHand = isService ? null : await stockOnHand(item.id);
     const sheet = openSheet(`
       <h2>${esc(item.description)}</h2>
-      <p class="helptext"><span class="tag">${esc(item.sku)}</span> · ${onHand} in stock</p>
+      <p class="helptext"><span class="tag">${esc(item.sku)}</span>${isService ? ' · Service / Raw material (not stock-tracked)' : ` · ${onHand} in stock`}</p>
       <div class="grid-2">
         <div><label>Quantity *</label><input id="qty" type="number" inputmode="numeric" min="1" value="1" /></div>
         <div><label>Sell amount (total) *</label><input id="sell" type="number" inputmode="decimal" value="${item.sellPrice || 0}" /></div>
       </div>
+      <label style="margin-top:8px">Additional information (optional)</label>
+      <input id="note" placeholder="e.g. neckline alteration note" />
+      ${saleType === 'tailoring' ? `<label style="margin-top:8px">Expected delivery date</label><input id="deliveryDate" type="date" value="${todayISO()}" style="max-width:160px" />` : ''}
       <button class="btn" id="addLine" style="margin-top:14px">Add to bill</button>
     `);
     $('#qty', sheet).oninput = () => {
@@ -338,8 +465,10 @@ async function runSaleCart(customer, saleType) {
       const sellAmount = parseFloat($('#sell', sheet).value);
       if (!qty || qty <= 0) { toast('Enter a valid quantity'); return; }
       if (isNaN(sellAmount) || sellAmount < 0) { toast('Enter a valid sell amount'); return; }
+      const line = { itemId: item.id, sku: item.sku, description: item.description, qty, sellAmount, note: $('#note', sheet).value.trim() };
+      if (saleType === 'tailoring') { line.expectedDeliveryDate = $('#deliveryDate', sheet).value || todayISO(); setLineDeliveryStatus(line, 'Pending'); }
       closeSheet();
-      cart.push({ itemId: item.id, sku: item.sku, description: item.description, qty, sellAmount });
+      cart.push(line);
       cartSheet();
     };
   }
@@ -347,23 +476,27 @@ async function runSaleCart(customer, saleType) {
   cartSheet();
 }
 
-function openManualLineForm(onAdd) {
+function openManualLineForm(onAdd, { heading, descPlaceholder, presets } = {}) {
   const sheet = openSheet(`
-    <h2>Manual line item</h2>
-    <p class="helptext">For a one-off item that isn't in your Item Master.</p>
-    <label>Description</label><input id="description" placeholder="e.g. Alteration charge" />
+    <h2>${esc(heading || 'Manual line item')}</h2>
+    <p class="helptext">For a one-off item/charge that isn't in your Item Master.</p>
+    ${presets?.length ? `<div class="btn-row" style="flex-wrap:wrap">${presets.map(p => `<button class="btn ghost sm presetBtn" data-v="${esc(p)}">${esc(p)}</button>`).join('')}</div>` : ''}
+    <label>Description</label><input id="description" placeholder="${esc(descPlaceholder || 'e.g. Alteration charge')}" />
     <div class="grid-2">
       <div><label>Quantity</label><input id="qty" type="number" min="1" value="1" /></div>
       <div><label>Sell amount (total)</label><input id="sell" type="number" /></div>
     </div>
+    <label>Additional information (optional)</label><input id="note" placeholder="optional" />
     <button class="btn" id="add" style="margin-top:10px">Add</button>
   `);
+  $$('.presetBtn', sheet).forEach(btn => btn.onclick = () => { $('#description', sheet).value = btn.dataset.v; });
   $('#add', sheet).onclick = () => {
     const description = $('#description', sheet).value.trim() || 'Manual item';
     const qty = parseInt($('#qty', sheet).value, 10) || 1;
     const sellAmount = parseFloat($('#sell', sheet).value) || 0;
+    const note = $('#note', sheet).value.trim();
     closeSheet();
-    onAdd({ itemId: null, sku: null, description, qty, sellAmount });
+    onAdd({ itemId: null, sku: null, description, qty, sellAmount, note });
   };
 }
 
@@ -374,10 +507,14 @@ async function finalizeSale(customer, saleType, cart, photos, subtotal, finalAmo
     lines: cart, subtotal, finalAmount, amountPaid: 0, adjustments: [], returns: [], loyaltyPointsEarned: 0, photos, createdAt: Date.now()
   };
 
-  // Consume stock FIFO for each line that refers to a real SKU (manual lines have no itemId).
+  // Consume stock FIFO for each line that refers to a real, stock-tracked (Trading)
+  // SKU — manual lines have no itemId, and Service/Raw-material items never get
+  // batches in the first place, so both are skipped entirely.
   let shortCount = 0;
   for (const line of cart) {
     if (!line.itemId) continue;
+    const item = await getItem(line.itemId);
+    if (item && itemCategory(item) === 'service') continue;
     const consumed = await consumeStockFIFO(line.itemId, line.qty);
     line.costTotal = consumed.costTotal;
     if (consumed.shortBy > 0) shortCount++;

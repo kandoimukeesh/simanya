@@ -6,9 +6,10 @@
 
 SCREENS.home = async (view) => {
   setTitle(SETTINGS.businessName || 'StockBill');
-  const [batches, vendorInvoices, customerInvoices, suppliers] = await Promise.all([
-    listInventory({ inStockOnly: true }), listVendorInvoices(), listCustomerInvoices(), listSuppliers()
+  const [batches, vendorInvoices, customerInvoices, suppliers, pendingDeliveries] = await Promise.all([
+    listInventory({ inStockOnly: true }), listVendorInvoices(), listCustomerInvoices(), listSuppliers(), listPendingDeliveryLines()
   ]);
+  const overdueDeliveries = pendingDeliveries.filter(p => p.line.expectedDeliveryDate < todayISO());
   const unitsInStock = batches.reduce((s, b) => s + (b.qtyRemaining || 0), 0);
   const stockValue = batches.reduce((s, b) => s + (b.qtyRemaining || 0) * (b.costPrice || 0), 0);
   const agingCritical = batches.filter(b => daysSince(b.purchaseDate) >= SETTINGS.agingCriticalDays);
@@ -49,6 +50,14 @@ SCREENS.home = async (view) => {
       <button class="btn ghost sm" id="viewSalesToday">View</button>
     </div>
 
+    ${pendingDeliveries.length ? `
+    <div class="section-title">Delivery Pending</div>
+    <div class="card row between" id="goDeliveries">
+      <div><div style="font-weight:700">${pendingDeliveries.length} item${pendingDeliveries.length===1?'':'s'} pending</div><div class="sub" style="color:${overdueDeliveries.length?'var(--danger)':'var(--text-muted)'};font-size:13px">${overdueDeliveries.length ? `${overdueDeliveries.length} overdue · ` : ''}${fmtMoney(pendingDeliveries.reduce((s,p)=>s+Number(p.line.sellAmount||0),0))} total value</div></div>
+      <button class="btn ghost sm">View</button>
+    </div>
+    ` : ''}
+
     ${(overdueCount || agingWarn.length || agingCritical.length || lastBackupText().warn) ? `
     <div class="section-title">Alerts</div>
     ${overdueCount ? `<div class="card row between"><div class="row">${icon('warning',16)} <b>${overdueCount}</b>&nbsp;vendor invoice${overdueCount===1?'':'s'} overdue</div><button class="btn ghost sm" id="goVendors">View</button></div>` : ''}
@@ -58,11 +67,12 @@ SCREENS.home = async (view) => {
     ` : ''}
 
     <div class="section-title">Overview</div>
-    <div class="card"><div class="row between"><span>Suppliers</span><b>${suppliers.length}</b></div></div>
+    <div class="card"><div class="row between"><span>Vendors</span><b>${suppliers.length}</b></div></div>
   `;
   $('#qaCapture').onclick = () => startCaptureFlow();
   $('#qaSell').onclick = () => startSaleFlow();
   $('#viewSalesToday').onclick = () => Nav.setRoot('sell', { tab: 'history' });
+  $('#goDeliveries')?.addEventListener('click', () => Nav.push('deliveryPending'));
   $('#goVendors')?.addEventListener('click', () => Nav.setRoot('vendors'));
   $('#goAging1')?.addEventListener('click', () => Nav.setRoot('inventory', { agingOnly: true }));
   $('#goAging2')?.addEventListener('click', () => Nav.setRoot('inventory', { agingOnly: true }));
@@ -76,10 +86,16 @@ SCREENS.more = async (view) => {
   view.innerHTML = `
     <div class="section-title">Manage</div>
     <div class="card" style="padding:0">
-      <div class="list-item" id="mItems"><div class="avatar">${icon('tag')}</div><div class="main"><div class="title">Item Master</div><div class="sub">SKUs — description, cost & sell price</div></div></div>
-      <div class="list-item" id="mSuppliers"><div class="avatar">${icon('factory')}</div><div class="main"><div class="title">Suppliers</div><div class="sub">Master list, search & add</div></div></div>
+      <div class="list-item" id="mItems"><div class="avatar">${icon('tag')}</div><div class="main"><div class="title">Item Master</div><div class="sub">SKUs — vendor + type + code, cost/wholesale/sell price</div></div></div>
+      <div class="list-item" id="mItemTypes"><div class="avatar">${icon('tag')}</div><div class="main"><div class="title">Item Types</div><div class="sub">The 3-letter code used in every SKU</div></div></div>
+      <div class="list-item" id="mSuppliers"><div class="avatar">${icon('factory')}</div><div class="main"><div class="title">Vendors</div><div class="sub">Master list, vendor code, search & add</div></div></div>
       <div class="list-item" id="mCustomers"><div class="avatar">${icon('person')}</div><div class="main"><div class="title">Customers</div><div class="sub">Master list, loyalty points & transactions</div></div></div>
       <div class="list-item" id="mReports"><div class="avatar">${icon('chart')}</div><div class="main"><div class="title">Dashboard</div><div class="sub">Daily view · weekly/monthly · supplier/customer</div></div></div>
+    </div>
+    <div class="section-title">Billing</div>
+    <div class="card" style="padding:0">
+      <div class="list-item" id="mDeliveries"><div class="avatar">${icon('box')}</div><div class="main"><div class="title">Delivery Pending</div><div class="sub">Date-wise tailoring deliveries, status & WhatsApp updates</div></div></div>
+      <div class="list-item" id="mNotes"><div class="avatar">${icon('doc')}</div><div class="main"><div class="title">Credit / Debit Notes</div><div class="sub">Every CN and DN together, newest first</div></div></div>
     </div>
     <div class="section-title">Data & Settings</div>
     <div class="card" style="padding:0">
@@ -88,9 +104,12 @@ SCREENS.more = async (view) => {
     </div>
   `;
   $('#mItems').onclick = () => Nav.push('itemsList');
+  $('#mItemTypes').onclick = () => Nav.push('itemTypesList');
   $('#mSuppliers').onclick = () => Nav.push('suppliersList');
   $('#mCustomers').onclick = () => Nav.push('customersList');
   $('#mReports').onclick = () => Nav.push('reports');
+  $('#mDeliveries').onclick = () => Nav.push('deliveryPending');
+  $('#mNotes').onclick = () => Nav.push('creditDebitNotes');
   $('#mSettings').onclick = () => Nav.push('settings');
   $('#mBackup').onclick = () => Nav.push('backup');
 };
