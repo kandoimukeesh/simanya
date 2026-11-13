@@ -72,11 +72,22 @@ SCREENS.backup = async (view) => {
       Nav.setRoot('home');
     } catch (e) { toast('Invalid backup file'); }
   };
-  $('#doWipe').onclick = async () => {
-    if (!confirm('This will permanently delete ALL inventory, suppliers, customers and invoices on this device. Continue?')) return;
-    await DB.clearAll();
-    await loadSettings();
-    toast('All data erased');
-    Nav.setRoot('home');
+  $('#doWipe').onclick = () => {
+    const sheet = openSheet(`
+      <h2 style="color:var(--danger)">Erase all data?</h2>
+      <p>This will <b>permanently delete</b> ALL inventory, vendors, customers and invoices on this device. This cannot be undone — make sure you've exported a backup first if you might need this data again.</p>
+      <div class="btn-row" style="margin-top:14px">
+        <button class="btn secondary" id="cancelWipe">Cancel</button>
+        <button class="btn danger" id="confirmWipe">Erase everything</button>
+      </div>
+    `);
+    $('#cancelWipe', sheet).onclick = () => closeSheet();
+    $('#confirmWipe', sheet).onclick = async () => {
+      await DB.clearAll();
+      await loadSettings();
+      closeSheet();
+      toast('All data erased');
+      Nav.setRoot('home');
+    };
   };
 };

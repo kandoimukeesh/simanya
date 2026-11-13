@@ -193,10 +193,22 @@ async function runCaptureSession(supplier, invoiceNumber, invoiceDate) {
       await addInventoryBatch({ itemId: item.id, supplierId: supplier.id, invoiceNumber, invoiceDate, qty, costPrice: cost });
       count++; totalCost += qty * cost;
       closeSheet();
-      toast(`${qty} × ${item.description} added · running total ${fmtMoney(totalCost)}`, 1800);
-      const again = await confirm(`Added ${qty} × ${item.description} at ${fmtMoney(cost)} each.\n\nRunning total: ${count} line${count===1?'':'s'}, ${fmtMoney(totalCost)}.\n\nAdd another SKU to this invoice?`);
-      if (again) pickItemStep(); else finishSession();
+      askAddAnother(item, qty, cost);
     };
+  }
+
+  function askAddAnother(item, qty, cost) {
+    const sheet = openSheet(`
+      <h2>Added to invoice</h2>
+      <p>${qty} × ${esc(item.description)} at ${fmtMoney(cost)} each.</p>
+      <p class="helptext">Running total: ${count} line${count===1?'':'s'}, ${fmtMoney(totalCost)}.</p>
+      <div class="btn-row" style="margin-top:10px">
+        <button class="btn secondary" id="doneInvoice">Done</button>
+        <button class="btn" id="addAnother">+ Add another SKU</button>
+      </div>
+    `);
+    $('#doneInvoice', sheet).onclick = () => { closeSheet(); finishSession(); };
+    $('#addAnother', sheet).onclick = () => { closeSheet(); pickItemStep(); };
   }
 
   function finishSession() {
