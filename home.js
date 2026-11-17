@@ -6,8 +6,8 @@
 
 SCREENS.home = async (view) => {
   setTitle(SETTINGS.businessName || 'StockBill');
-  const [batches, vendorInvoices, customerInvoices, suppliers, pendingDeliveries] = await Promise.all([
-    listInventory({ inStockOnly: true }), listVendorInvoices(), listCustomerInvoices(), listSuppliers(), listPendingDeliveryLines()
+  const [batches, vendorInvoices, customerInvoices, pendingDeliveries] = await Promise.all([
+    listInventory({ inStockOnly: true }), listVendorInvoices(), listCustomerInvoices(), listPendingDeliveryLines()
   ]);
   const overdueDeliveries = pendingDeliveries.filter(p => p.line.expectedDeliveryDate < todayISO());
   const unitsInStock = batches.reduce((s, b) => s + (b.qtyRemaining || 0), 0);
@@ -65,9 +65,6 @@ SCREENS.home = async (view) => {
     ${agingWarn.length ? `<div class="card row between"><div class="row"><span class="dot warn"></span> <b>${agingWarn.length}</b>&nbsp;batch${agingWarn.length===1?'':'es'} ageing ${SETTINGS.agingWarnDays}+ days</div><button class="btn ghost sm" id="goAging2">View</button></div>` : ''}
     ${lastBackupText().warn ? `<div class="card row between"><div class="row">${icon('backup',16)} ${esc(lastBackupText().text)} — back up your data</div><button class="btn ghost sm" id="goBackup">Back up</button></div>` : ''}
     ` : ''}
-
-    <div class="section-title">Overview</div>
-    <div class="card"><div class="row between"><span>Vendors</span><b>${suppliers.length}</b></div></div>
   `;
   $('#qaCapture').onclick = () => startCaptureFlow();
   $('#qaSell').onclick = () => startSaleFlow();

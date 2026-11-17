@@ -7,7 +7,7 @@
    ============================================================ */
 
 SCREENS.vendors = async (view) => {
-  setTitle('Vendors & Billing');
+  setTitle('Purchase & Billing');
   addFab('+', () => startCaptureFlow());
   const [suppliers, vendorInvoices] = await Promise.all([listSuppliers(), listVendorInvoices()]);
   if (!suppliers.length) {
@@ -20,14 +20,18 @@ SCREENS.vendors = async (view) => {
   const rows = [];
   for (const s of suppliers) {
     const invs = bySupplier[s.id] || [];
-    let totalBal = 0, overdue = 0;
+    // Sum the SIGNED net (not the clamped balance) across every invoice so a
+    // refund-due invoice properly offsets a due one instead of being silently
+    // zeroed out — otherwise an overpaid vendor could show "₹0 settled" even
+    // though you're actually owed money back.
+    let totalNet = 0, overdue = 0;
     for (const vi of invs) {
       const costTotal = await getVendorInvoiceCostTotal(vi.invoiceKey);
-      const bal = vendorInvoiceBalance(vi, costTotal);
-      totalBal += bal;
-      if (bal > 0 && daysSince(vi.invoiceDate) > SETTINGS.vendorCreditDays) overdue++;
+      const net = vendorInvoiceNet(vi, costTotal);
+      totalNet += net;
+      if (net > 0 && daysSince(vi.invoiceDate) > SETTINGS.vendorCreditDays) overdue++;
     }
-    rows.push({ supplier: s, invCount: invs.length, totalBal, overdue });
+    rows.push({ supplier: s, invCount: invs.length, totalNet: round2(totalNet), overdue });
   }
   view.innerHTML = rows.map(r => `
     <div class="list-item" data-id="${r.supplier.id}">
@@ -37,8 +41,8 @@ SCREENS.vendors = async (view) => {
         <div class="sub">${r.invCount} invoice${r.invCount === 1 ? '' : 's'}${r.overdue ? ` · ${r.overdue} overdue` : ''}</div>
       </div>
       <div class="end">
-        <div style="font-weight:700;color:${r.totalBal > 0 ? 'var(--danger)' : 'var(--success)'}">${fmtMoney(r.totalBal)}</div>
-        <div class="sub">${r.totalBal > 0 ? 'due' : 'settled'}</div>
+        <div style="font-weight:700;color:${r.totalNet > 0 ? 'var(--danger)' : r.totalNet < 0 ? 'var(--warn)' : 'var(--success)'}">${fmtMoney(Math.abs(r.totalNet))}</div>
+        <div class="sub">${r.totalNet > 0 ? 'due' : r.totalNet < 0 ? 'refund due' : 'settled'}</div>
       </div>
     </div>
   `).join('');
@@ -92,12 +96,29 @@ function openVendorInvoiceSheet(vendorInvoiceId) {
   });
 }
 
-function drawVendorInvoiceSheet(vi, costTotal) {
+async function drawVendorInvoiceSheet(vi, costTotal) {
   const paid = vendorInvoicePaid(vi);
   const returnsCredit = vendorInvoiceReturnsCredit(vi);
   const adjTotal = vendorInvoiceAdjustmentTotal(vi);
   const net = vendorInvoiceNet(vi, costTotal);
   const otherChargesTotal = vendorInvoiceOtherChargesTotal(vi);
+  const [batches, items] = await Promise.all([listInventory({ invoiceKey: vi.invoiceKey }), listItems()]);
+  const itemById = Object.fromEntries(items.map(i => [i.id, i]));
+
+  const linesHtml = batches.length ? batches.map(b => {
+    const it = itemById[b.itemId] || { description: 'Unknown item', sku: '—' };
+    const editable = (b.qtyRemaining || 0) === (b.qtyReceived || 0);
+    return `
+      <div class="line-item">
+        <div class="row between">
+          <div><div style="font-weight:700">${esc(it.description)}</div><div class="sub"><span class="tag">${esc(it.sku)}</span> · ${b.qtyReceived} × ${fmtMoney(b.costPrice)}</div></div>
+          <b>${fmtMoney((b.qtyReceived || 0) * (b.costPrice || 0))}</b>
+        </div>
+        ${editable
+          ? `<div class="btn-row" style="margin-top:6px"><button class="btn ghost sm editBatchBtn" data-batchid="${b.id}">Edit</button><button class="btn ghost sm removeBatchBtn" data-batchid="${b.id}">Remove</button></div>`
+          : `<div class="helptext">${(b.qtyReceived || 0) - (b.qtyRemaining || 0)} of these already sold/returned — locked from editing</div>`}
+      </div>`;
+  }).join('') : '<div class="empty" style="padding:10px 0">No items added to this invoice yet.</div>';
 
   const sheet = openSheet(`
     <h2>Invoice ${esc(vi.invoiceNumber)}</h2>
@@ -108,6 +129,11 @@ function drawVendorInvoiceSheet(vi, costTotal) {
     </div>
     ${(returnsCredit || adjTotal) ? `<p class="helptext" style="margin-bottom:10px">${returnsCredit ? `Returns credit: <b>${fmtMoney(returnsCredit)}</b>. ` : ''}${adjTotal ? `Discount/adjustment: <b>${fmtMoney(adjTotal)}</b>.` : ''}</p>` : ''}
 
+    <div class="section-title" style="margin-top:0">Items on this invoice</div>
+    <div id="invLinesWrap">${linesHtml}</div>
+    <button class="btn secondary" id="addMoreItems" style="margin:4px 0 2px">+ Add item to this invoice</button>
+
+    <div class="divider"></div>
     <label>Bill amount (vendor's invoice total)</label>
     <input id="billAmt" type="number" inputmode="decimal" value="${vi.billAmount ?? costTotal}" />
     <button class="btn secondary sm" id="saveBillAmt" style="margin-top:8px;width:100%">Save bill amount</button>
@@ -192,6 +218,63 @@ function drawVendorInvoiceSheet(vi, costTotal) {
       drawVendorInvoiceSheet(fresh, freshTotal);
     });
   };
+
+  async function refreshSheet() {
+    const freshTotal = await getVendorInvoiceCostTotal(vi.invoiceKey);
+    const fresh = await DB.get('vendorInvoices', vi.id);
+    drawVendorInvoiceSheet(fresh, freshTotal);
+  }
+
+  // Resume the same search-SKU → qty/cost → "add another" flow used for a brand
+  // new purchase, but scoped onto this already-saved invoice — so adding more
+  // lines later never means hunting back through Inventory to find it.
+  $('#addMoreItems', sheet).onclick = async () => {
+    closeSheet();
+    const supplier = await DB.get('suppliers', vi.supplierId);
+    runCaptureSession(supplier, vi.invoiceNumber, vi.invoiceDate, { onFinish: refreshSheet });
+  };
+  $$('.editBatchBtn', sheet).forEach(btn => btn.onclick = () => {
+    const b = batches.find(x => x.id === btn.dataset.batchid);
+    const it = itemById[b.itemId] || { description: 'Item' };
+    const editSheet = openSheet(`
+      <h2>Edit line</h2>
+      <p class="helptext">${esc(it.description)} · <span class="tag">${esc(it.sku || '')}</span></p>
+      <div class="grid-2">
+        <div><label>Quantity</label><input id="eqty" type="number" min="1" value="${b.qtyReceived}" /></div>
+        <div><label>Cost price (per unit)</label><input id="ecost" type="number" inputmode="decimal" value="${b.costPrice}" /></div>
+      </div>
+      <button class="btn" id="saveBatch" style="margin-top:12px">Save</button>
+    `);
+    $('#saveBatch', editSheet).onclick = async () => {
+      try {
+        await updateInventoryBatch(b, { qty: $('#eqty', editSheet).value, costPrice: $('#ecost', editSheet).value });
+        toast('Line updated');
+        closeSheet();
+        refreshSheet();
+      } catch (err) { toast(err.message || 'Could not update'); }
+    };
+  });
+  $$('.removeBatchBtn', sheet).forEach(btn => btn.onclick = () => {
+    const b = batches.find(x => x.id === btn.dataset.batchid);
+    const it = itemById[b.itemId] || { description: 'this item' };
+    const confirmSheet = openSheet(`
+      <h2 style="color:var(--danger)">Remove this line?</h2>
+      <p>This removes ${b.qtyReceived} × ${esc(it.description)} from invoice ${esc(vi.invoiceNumber)}. This cannot be undone.</p>
+      <div class="btn-row" style="margin-top:14px">
+        <button class="btn secondary" id="cancelRm">Cancel</button>
+        <button class="btn danger" id="okRm">Remove</button>
+      </div>
+    `);
+    $('#cancelRm', confirmSheet).onclick = () => closeSheet();
+    $('#okRm', confirmSheet).onclick = async () => {
+      try {
+        await removeInventoryBatch(b);
+        toast('Line removed');
+        closeSheet();
+        refreshSheet();
+      } catch (err) { toast(err.message || 'Could not remove'); }
+    };
+  });
 }
 
 // eligibleBatches: this invoice's remaining-stock batches. Each gets a qty-to-return

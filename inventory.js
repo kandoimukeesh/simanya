@@ -156,7 +156,7 @@ function captureFlowStep2(supplier) {
   };
 }
 
-async function runCaptureSession(supplier, invoiceNumber, invoiceDate) {
+async function runCaptureSession(supplier, invoiceNumber, invoiceDate, { onFinish } = {}) {
   let count = 0, totalCost = 0;
 
   async function pickItemStep() {
@@ -213,7 +213,7 @@ async function runCaptureSession(supplier, invoiceNumber, invoiceDate) {
 
   function finishSession() {
     toast(`Purchase entry done: ${count} line(s), ${fmtMoney(totalCost)} total.`, 3000);
-    Nav.setRoot('inventory');
+    if (onFinish) onFinish(); else Nav.setRoot('inventory');
   }
 
   pickItemStep();

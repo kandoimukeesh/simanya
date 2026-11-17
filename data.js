@@ -339,6 +339,23 @@ async function listInventory(filter = {}) {
   if (filter.inStockOnly) rows = rows.filter(r => (r.qtyRemaining || 0) > 0);
   return rows.sort((a, b) => (a.purchaseDate || '').localeCompare(b.purchaseDate || ''));
 }
+// Edit/remove a purchase line (batch) — only allowed while nothing from it has been
+// sold or returned yet (qtyRemaining === qtyReceived), so FIFO consumption already
+// recorded against other batches never goes stale or inconsistent.
+async function updateInventoryBatch(batch, { qty, costPrice }) {
+  if ((batch.qtyRemaining || 0) !== (batch.qtyReceived || 0)) throw new Error('Cannot edit — some units from this line have already been sold or returned.');
+  const q = parseInt(qty, 10);
+  if (!q || q <= 0) throw new Error('Enter a valid quantity');
+  const c = parseFloat(costPrice);
+  if (isNaN(c) || c < 0) throw new Error('Enter a valid cost price');
+  batch.qtyReceived = q; batch.qtyRemaining = q; batch.costPrice = c;
+  await DB.put('inventoryBatches', batch);
+  return batch;
+}
+async function removeInventoryBatch(batch) {
+  if ((batch.qtyRemaining || 0) !== (batch.qtyReceived || 0)) throw new Error('Cannot remove — some units from this line have already been sold or returned.');
+  await DB.delete('inventoryBatches', batch.id);
+}
 async function stockOnHand(itemId) {
   const batches = await listInventory({ itemId, inStockOnly: true });
   return batches.reduce((s, b) => s + (b.qtyRemaining || 0), 0);

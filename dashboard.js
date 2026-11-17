@@ -206,12 +206,28 @@ SCREENS.reports = async (view) => {
       const q = b.qtyRemaining;
       if (d <= 30) buckets['0-30'] += q; else if (d <= 60) buckets['31-60'] += q; else if (d <= 90) buckets['61-90'] += q; else buckets['90+'] += q;
     });
-    const payableRows = vendorInvoices.map(vi => {
+    // Grouped by party (not one row per invoice/bill) so e.g. a customer with
+    // several open bills shows as one line with a combined balance, rather than
+    // scattering across separate rows that make the total hard to read at a glance.
+    const payableByVendor = {};
+    for (const vi of vendorInvoices) {
       const costTotal = costTotalFor(vi.invoiceKey);
       const bal = vendorInvoiceBalance(vi, costTotal);
-      return { name: supplierById[vi.supplierId]?.name || '—', invNo: vi.invoiceNumber, bal, overdue: daysSince(vi.invoiceDate) > SETTINGS.vendorCreditDays };
-    }).filter(r => r.bal > 0);
-    const receivableRows = customerInvoices.map(ci => ({ name: customerById[ci.customerId]?.name || '—', billNo: ci.billNumber, bal: customerInvoiceBalance(ci) })).filter(r => r.bal > 0);
+      if (bal <= 0) continue;
+      const g = (payableByVendor[vi.supplierId] ||= { name: supplierById[vi.supplierId]?.name || '—', bal: 0, count: 0, overdue: false });
+      g.bal = round2(g.bal + bal); g.count++;
+      if (daysSince(vi.invoiceDate) > SETTINGS.vendorCreditDays) g.overdue = true;
+    }
+    const payableRows = Object.values(payableByVendor).sort((a, b) => b.bal - a.bal);
+
+    const receivableByCustomer = {};
+    for (const ci of customerInvoices) {
+      const bal = customerInvoiceBalance(ci);
+      if (bal <= 0) continue;
+      const g = (receivableByCustomer[ci.customerId] ||= { name: customerById[ci.customerId]?.name || '—', bal: 0, count: 0 });
+      g.bal = round2(g.bal + bal); g.count++;
+    }
+    const receivableRows = Object.values(receivableByCustomer).sort((a, b) => b.bal - a.bal);
     const totalSales = customerInvoices.reduce((s, c) => s + (c.finalAmount || 0), 0);
     const totalPurchaseCost = batches.reduce((s, b) => s + (b.qtyReceived || 0) * (b.costPrice || 0), 0);
     return `
@@ -258,9 +274,9 @@ SCREENS.reports = async (view) => {
       <div class="card row between"><span>Total purchase cost (all-time)</span><b>${fmtMoney(totalPurchaseCost)}</b></div>
       <div class="card row between"><span>Total sales billed (all-time)</span><b>${fmtMoney(totalSales)}</b></div>
       <div class="section-title">Outstanding to vendors</div>
-      ${payableRows.length ? payableRows.map(r => `<div class="card row between"><span>${esc(r.name)} · ${esc(r.invNo)}</span><b style="color:${r.overdue ? 'var(--danger)' : 'var(--warn)'}">${fmtMoney(r.bal)}</b></div>`).join('') : '<div class="empty">Nothing outstanding.</div>'}
+      ${payableRows.length ? payableRows.map(r => `<div class="card row between"><span>${esc(r.name)} <span class="sub">(${r.count} invoice${r.count===1?'':'s'})</span></span><b style="color:${r.overdue ? 'var(--danger)' : 'var(--warn)'}">${fmtMoney(r.bal)}</b></div>`).join('') : '<div class="empty">Nothing outstanding.</div>'}
       <div class="section-title">Outstanding from customers</div>
-      ${receivableRows.length ? receivableRows.map(r => `<div class="card row between"><span>${esc(r.name)} · ${esc(r.billNo)}</span><b style="color:var(--danger)">${fmtMoney(r.bal)}</b></div>`).join('') : '<div class="empty">Nothing outstanding.</div>'}
+      ${receivableRows.length ? receivableRows.map(r => `<div class="card row between"><span>${esc(r.name)} <span class="sub">(${r.count} bill${r.count===1?'':'s'})</span></span><b style="color:var(--danger)">${fmtMoney(r.bal)}</b></div>`).join('') : '<div class="empty">Nothing outstanding.</div>'}
     `;
   }
 
@@ -294,10 +310,11 @@ SCREENS.reports = async (view) => {
         return `<div class="card">
           <div class="row between"><b>${esc(supplierById[sid]?.name || 'Unknown')}</b><span class="badge neutral">${g.units} units</span></div>
           <div class="grid-3" style="text-align:center;margin-top:8px">
-            <div><div class="sub">Cost</div><b>${fmtMoney(g.cost)}</b></div>
+            <div><div class="sub">Purchase cost</div><b>${fmtMoney(g.cost)}</b></div>
             <div><div class="sub">Sell value (est.)</div><b>${fmtMoney(g.sellValue)}</b></div>
             <div><div class="sub">Paid (period)</div><b>${fmtMoney(paid)}</b></div>
           </div>
+          <div class="helptext" style="margin-top:6px">"Paid (period)" is any payment made to this vendor in this date range — it can be higher or lower than "Purchase cost" above if it's settling an older invoice, or if this period's stock hasn't been paid for yet.</div>
         </div>`;
       }).join('')}
     `;

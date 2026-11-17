@@ -189,7 +189,7 @@ function openTailoringAddFlow(ci, customer, onDone) {
       <p class="helptext"><span class="tag">${esc(item.sku)}</span>${item.costPrice ? ` · cost ${fmtMoney(item.costPrice)}` : ''}</p>
       <div class="grid-2">
         <div><label>Quantity *</label><input id="qty" type="number" min="1" value="1" /></div>
-        <div><label>Charge (total) *</label><input id="sell" type="number" inputmode="decimal" value="${item.sellPrice || 0}" /></div>
+        <div><label>Service charge (total) *</label><input id="sell" type="number" inputmode="decimal" value="${item.sellPrice || 0}" /></div>
       </div>
       <label style="margin-top:8px">Additional information (optional)</label>
       <input id="note" placeholder="e.g. alteration note" />
@@ -354,7 +354,7 @@ async function runSaleCart(customer, saleType) {
             <div><div style="font-weight:700">Item ${idx+1} · ${esc(l.description)}</div><div class="sub"><span class="tag">${esc(l.sku || 'manual')}</span> × ${l.qty}</div></div>
             <button class="btn danger sm removeLine" data-idx="${idx}">${icon('close',12)}</button>
           </div>
-          <label style="margin:8px 0 2px">Sell amount (total for ${l.qty})</label>
+          <label style="margin:8px 0 2px">${saleType === 'tailoring' ? `Service charge (total for ${l.qty})` : `Sell amount (total for ${l.qty})`}</label>
           <input type="number" class="sellEdit" data-idx="${idx}" value="${l.sellAmount}" />
           <label style="margin:6px 0 2px">Additional information (optional)</label>
           <input class="noteEdit" data-idx="${idx}" value="${esc(l.note || '')}" placeholder="e.g. neckline alteration note" />
@@ -443,13 +443,19 @@ async function runSaleCart(customer, saleType) {
 
   async function qtyPriceStep(item) {
     const isService = itemCategory(item) === 'service';
+    const isTailoring = saleType === 'tailoring';
     const onHand = isService ? null : await stockOnHand(item.id);
+    const stockNote = isService
+      ? ' · Service / Raw material (not stock-tracked)'
+      : isTailoring
+        ? ` · ${onHand} in stock (reference only — no stock is deducted on a Tailoring/Designing bill)`
+        : ` · ${onHand} in stock`;
     const sheet = openSheet(`
       <h2>${esc(item.description)}</h2>
-      <p class="helptext"><span class="tag">${esc(item.sku)}</span>${isService ? ' · Service / Raw material (not stock-tracked)' : ` · ${onHand} in stock`}</p>
+      <p class="helptext"><span class="tag">${esc(item.sku)}</span>${stockNote}</p>
       <div class="grid-2">
         <div><label>Quantity *</label><input id="qty" type="number" inputmode="numeric" min="1" value="1" /></div>
-        <div><label>Sell amount (total) *</label><input id="sell" type="number" inputmode="decimal" value="${item.sellPrice || 0}" /></div>
+        <div><label>${isTailoring ? 'Service charge (total)' : 'Sell amount (total)'} *</label><input id="sell" type="number" inputmode="decimal" value="${item.sellPrice || 0}" /></div>
       </div>
       <label style="margin-top:8px">Additional information (optional)</label>
       <input id="note" placeholder="e.g. neckline alteration note" />
@@ -514,7 +520,11 @@ async function finalizeSale(customer, saleType, cart, photos, subtotal, finalAmo
   for (const line of cart) {
     if (!line.itemId) continue;
     const item = await getItem(line.itemId);
-    if (item && itemCategory(item) === 'service') continue;
+    // Tailoring/Designing bills are service charges, even when the line
+    // references a Trading SKU (e.g. the garment being altered) — no stock is
+    // ever deducted for them, the same rule Service/Raw-material items already
+    // follow on every sale type.
+    if (saleType === 'tailoring' || (item && itemCategory(item) === 'service')) continue;
     const consumed = await consumeStockFIFO(line.itemId, line.qty);
     line.costTotal = consumed.costTotal;
     if (consumed.shortBy > 0) shortCount++;

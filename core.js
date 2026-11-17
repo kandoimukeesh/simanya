@@ -50,14 +50,18 @@ function icon(name, size = 20) {
 let SETTINGS = null; // populated by data.js's loadSettings(), read everywhere
 
 /* ---------- formatting helpers ---------- */
+// A non-breaking space between the ₹ symbol and the digits — without it the
+// symbol sits flush against the number (reads as "₹365" with no breathing
+// room);   also stops the two ever wrapping onto separate lines.
 function fmtMoney(n) {
   const v = Number(n || 0);
-  return `${SETTINGS?.currencySymbol || '₹'}${v.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+  const sym = SETTINGS?.currencySymbol || '₹';
+  return `${sym} ${v.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 }
-// Compact Indian-style money for tight spaces (chart value labels): ₹45k, ₹1.2L, ₹2.3Cr.
+// Compact Indian-style money for tight spaces (chart value labels): ₹ 45k, ₹ 1.2L, ₹ 2.3Cr.
 function fmtCompact(n) {
   const v = Number(n || 0);
-  const sym = SETTINGS?.currencySymbol || '₹';
+  const sym = (SETTINGS?.currencySymbol || '₹') + ' ';
   const av = Math.abs(v);
   if (av >= 1e7) return sym + (v / 1e7).toFixed(av % 1e7 === 0 ? 0 : 1) + 'Cr';
   if (av >= 1e5) return sym + (v / 1e5).toFixed(av % 1e5 === 0 ? 0 : 1) + 'L';
@@ -146,17 +150,61 @@ function toast(msg, ms = 2400) {
   setTimeout(() => el.remove(), ms);
 }
 
-/* ---------- sheet (bottom modal) ---------- */
+/* ---------- sheet (bottom modal) ----------
+   Every sheet gets a visible ✕ close button (previously the ONLY way to
+   dismiss one was tapping the dark backdrop around it, which read as broken
+   navigation — "I have to click elsewhere and the screen disappears"), and
+   opening one pushes a history entry so the phone's own back button/gesture
+   closes the sheet instead of leaving the app or the current page.
+
+   A multi-step wizard closes one sheet and immediately opens the next,
+   often before the browser has actually finished the previous close's
+   history.back() navigation — and calling history.pushState() while a
+   back() is still "in flight" corrupts the history stack (verified by
+   instrumenting real back()/pushState()/popstate order: the browser doesn't
+   apply back() relative to the index at the time it runs, it can overshoot
+   and even drop the entry the following pushState just created). So instead
+   of pushing immediately, openSheet() only pushes right away when no back()
+   is outstanding; otherwise it just flags that a push is owed, and the
+   popstate handler performs that one deferred push once every outstanding
+   back() has actually resolved — collapsing any close→open→close→open churn
+   into the single history entry that actually matches what's on screen. */
+let _pendingBacks = 0;
+let _deferredOpenPending = false;
 function openSheet(innerHTML, { onMount } = {}) {
   const backdrop = document.createElement('div');
   backdrop.className = 'sheet-backdrop';
-  backdrop.innerHTML = `<div class="sheet"><div class="sheet-handle"></div>${innerHTML}</div>`;
+  backdrop.innerHTML = `<div class="sheet"><div class="sheet-handle"></div><button class="sheet-close" id="__sheetClose" aria-label="Close">${icon('close', 15)}</button>${innerHTML}</div>`;
   backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeSheet(); });
+  backdrop.querySelector('#__sheetClose').onclick = () => closeSheet();
   $('#modalRoot').appendChild(backdrop);
+  if (_pendingBacks > 0) _deferredOpenPending = true;
+  else history.pushState({ sheet: true }, '');
   if (onMount) onMount(backdrop.querySelector('.sheet'));
   return backdrop;
 }
-function closeSheet() { $$('.sheet-backdrop').forEach(n => n.remove()); }
+function closeSheet() {
+  const hadOpen = $$('.sheet-backdrop').length > 0;
+  $$('.sheet-backdrop').forEach(n => n.remove());
+  // Whatever was deferred is moot now — the most recent action is "closed";
+  // a later openSheet() (if one follows) will flag it again.
+  _deferredOpenPending = false;
+  if (hadOpen) { _pendingBacks++; history.back(); }
+}
+window.addEventListener('popstate', () => {
+  if (_pendingBacks > 0) {
+    _pendingBacks--;
+    if (_pendingBacks === 0 && _deferredOpenPending) {
+      _deferredOpenPending = false;
+      history.pushState({ sheet: true }, '');
+    }
+    return;
+  }
+  // A real back button/gesture press while a sheet is open: close it instead
+  // of letting the navigation fall through to the page/app underneath.
+  _deferredOpenPending = false;
+  $$('.sheet-backdrop').forEach(n => n.remove());
+});
 
 /* ---------- generic "search existing or add new" picker sheet ----------
    Used by supplier pick (inventory.js), customer pick (sell.js), item/SKU
@@ -298,6 +346,9 @@ function showPinLock(correctPin, onUnlock) {
    BOOT (invoked from main.js, after every module has loaded)
    ============================================================ */
 async function boot() {
+  // A baseline history entry so the very first sheet's close (history.back())
+  // always lands on something inside the app, never out of it.
+  history.replaceState({ app: true }, '');
   await loadSettings();
   $('#backBtn').innerHTML = icon('back', 19);
   $('#settingsBtn').innerHTML = icon('settings', 19);

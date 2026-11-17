@@ -249,10 +249,18 @@ textarea { resize: vertical; min-height: 60px; }
   animation: slideup .18s ease-out;
   border-top: 3px solid;
   border-image: var(--gold-shine) 1;
+  position: relative;
 }
 @keyframes slideup { from { transform: translateY(30px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 .sheet-handle { width: 42px; height: 4px; background: var(--gold-gradient); border-radius: 4px; margin: 0 auto 12px; opacity: .55; }
-.sheet h2 { margin-top: 0; font-family: var(--font-display); color: var(--text); }
+.sheet h2 { margin-top: 0; padding-right: 36px; font-family: var(--font-display); color: var(--text); }
+.sheet-close {
+  position: absolute; top: 14px; right: 14px; width: 34px; height: 34px; border-radius: 50%;
+  border: none; background: var(--surface-2); color: var(--text-muted);
+  display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 2;
+}
+.sheet-close:active { background: var(--border); }
+.sheet-close .ico-svg { width: 14px; height: 14px; }
 
 .search-list { max-height: 46vh; overflow-y: auto; margin-top: 8px; }
 
